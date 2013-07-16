@@ -70,9 +70,10 @@ More detail and specific examples can be found in the included HTML file.
 		var canvas = null,
 			target = null,
 			maxRadius = null,
+			outerRadius = null,
+			innerRadius = null,
 			centerLeft = null,
 			centerTop = null,
-			processed = false,
 			ctx = null;
 
 		// interactive variables
@@ -150,142 +151,29 @@ More detail and specific examples can be found in the included HTML file.
 		});
 
 		function processDatapoints(plot, series, datapoints) {
-			if (!processed)	{
-				processed = true;
-				canvas = plot.getCanvas();
-				target = $(canvas).parent();
-				options = plot.getOptions();
-				plot.setData(combine(plot.getData()));
-			}
-		}
-
-		function combine(data) {
-
-			var total = 0,
-				combined = 0,
-				numCombined = 0,
-				color = options.series.pie.combine.color,
-				newdata = [];
-
-			// Fix up the raw data from Flot, ensuring the data is numeric
-
-			for (var i = 0; i < data.length; ++i) {
-
-				var value = data[i].data;
-
-				// If the data is an array, we'll assume that it's a standard
-				// Flot x-y pair, and are concerned only with the second value.
-
-				// Note how we use the original array, rather than creating a
-				// new one; this is more efficient and preserves any extra data
-				// that the user may have stored in higher indexes.
-
-				if ($.isArray(value) && value.length == 1) {
-    				value = value[0];
-				}
-
-				if ($.isArray(value)) {
-					// Equivalent to $.isNumeric() but compatible with jQuery < 1.7
-					if (!isNaN(parseFloat(value[1])) && isFinite(value[1])) {
-						value[1] = +value[1];
-					} else {
-						value[1] = 0;
-					}
-				} else if (!isNaN(parseFloat(value)) && isFinite(value)) {
-					value = [1, +value];
-				} else {
-					value = [1, 0];
-				}
-
-				data[i].data = [value];
-			}
-
-			// Sum up all the slices, so we can calculate percentages for each
-
-			for (var i = 0; i < data.length; ++i) {
-				total += data[i].data[0][1];
-			}
-
-			// Count the number of slices with percentages below the combine
-			// threshold; if it turns out to be just one, we won't combine.
-
-			for (var i = 0; i < data.length; ++i) {
-				var value = data[i].data[0][1];
-				if (value / total <= options.series.pie.combine.threshold) {
-					combined += value;
-					numCombined++;
-					if (!color) {
-						color = data[i].color;
-					}
-				}
-			}
-
-			for (var i = 0; i < data.length; ++i) {
-				var value = data[i].data[0][1];
-				if (numCombined < 2 || value / total > options.series.pie.combine.threshold) {
-					newdata.push({
-						data: [[1, value]],
-						color: data[i].color,
-						label: data[i].label,
-						angle: value * Math.PI * 2 / total,
-						percent: value / (total / 100)
-					});
-				}
-			}
-
-			if (numCombined > 1) {
-				newdata.push({
-					data: [[1, combined]],
-					color: color,
-					label: options.series.pie.combine.label,
-					angle: combined * Math.PI * 2 / total,
-					percent: combined / (total / 100)
-				});
-			}
-
-			return newdata;
+			canvas = plot.getCanvas();
+			target = $(canvas).parent();
+			options = plot.getOptions();
 		}
 
 		function draw(plot, newCtx) {
-
 			if (!target) {
 				return; // if no series were passed
 			}
 
 			var canvasWidth = plot.getPlaceholder().width(),
 				canvasHeight = plot.getPlaceholder().height(),
-				legendWidth = target.children().filter(".legend").children().width() || 0;
+				legendWidth = target.children().filter(".legend").children().width() || 0,
+				maxSeries = 0;
 
 			ctx = newCtx;
 
-			// WARNING: HACK! REWRITE THIS CODE AS SOON AS POSSIBLE!
-
-			// When combining smaller slices into an 'other' slice, we need to
-			// add a new series.  Since Flot gives plugins no way to modify the
-			// list of series, the pie plugin uses a hack where the first call
-			// to processDatapoints results in a call to setData with the new
-			// list of series, then subsequent processDatapoints do nothing.
-
-			// The plugin-global 'processed' flag is used to control this hack;
-			// it starts out false, and is set to true after the first call to
-			// processDatapoints.
-
-			// Unfortunately this turns future setData calls into no-ops; they
-			// call processDatapoints, the flag is true, and nothing happens.
-
-			// To fix this we'll set the flag back to false here in draw, when
-			// all series have been processed, so the next sequence of calls to
-			// processDatapoints once again starts out with a slice-combine.
-			// This is really a hack; in 0.9 we need to give plugins a proper
-			// way to modify series before any processing begins.
-
-			processed = false;
-
 			// calculate maximum radius and center point
-
 			maxRadius =  Math.min(canvasWidth, canvasHeight / options.series.pie.tilt) / 2;
 			centerTop = canvasHeight / 2 + options.series.pie.offset.top;
 			centerLeft = canvasWidth / 2;
+			outerRadius = options.series.pie.radius > 1 ? options.series.pie.radius : maxRadius * options.series.pie.radius;
+			innerRadius = options.series.pie.innerRadius > 1 ? options.series.pie.innerRadius : maxRadius * options.series.pie.innerRadius;
 
 			if (options.series.pie.offset.left == "auto") {
 				if (options.legend.position.match("w")) {
@@ -303,26 +191,85 @@ More detail and specific examples can be found in the included HTML file.
 				centerLeft = canvasWidth - maxRadius;
 			}
 
-			var slices = plot.getData(),
+			var data = plot.getData(),
 				attempts = 0;
 
-			// Keep shrinking the pie's radius until drawPie returns true,
-			// indicating that all the labels fit, or we try too many times.
-
+			// Find max number of series in the data
+			for (var i = 0; i < data.length; i++) {
+				maxSeries = Math.max(maxSeries, data[i].data.length);
+			}
+			
 			do {
-				if (attempts > 0) {
-					maxRadius *= REDRAW_SHRINK;
-				}
-				attempts += 1;
+				// Clear canvas
 				clear();
-				if (options.series.pie.tilt <= 0.8) {
-					drawShadow();
-				}
-			} while (!drawPie() && attempts < REDRAW_ATTEMPTS)
 
+				// Process the series one-by-one
+				var s;
+				for (s = 0; s < maxSeries; s++) {
+
+					// Get total for this set
+					var total = 0,
+						combined = 0,
+						numCombined = 0,
+						color = options.series.pie.combine.color,
+						newdata = [];
+
+					for (var i = 0; i < data.length; ++i) {
+						if (data[i].data[s])
+							total += data[i].data[s][1];
+					}
+					// Count the number of slices with percentages below the combine
+					// threshold; if it turns out to be just one, we won't combine.
+
+					for (var i = 0; i < data.length; ++i) {
+						var value = data[i].data[s][1];
+						if (value / total <= options.series.pie.combine.threshold) {
+							combined += value;
+							numCombined++;
+							if (!color) {
+								color = data[i].color;
+							}
+						}
+					}
+
+					for (var i = 0; i < data.length; ++i) {
+						var value = data[i].data[s][1];
+						if (numCombined < 2 || value / total > options.series.pie.combine.threshold) {
+							newdata.push({
+								data: [[1, value]],
+								color: data[i].color,
+								label: data[i].label,
+								angle: value * Math.PI * 2 / total,
+								percent: value / (total / 100),
+							});
+						}
+					}
+
+					if (numCombined > 1) {
+						newdata.push({
+							data: [[1, combined]],
+							color: color,
+							label: options.series.pie.combine.label,
+							angle: combined * Math.PI * 2 / total,
+							percent: combined / (total / 100)
+						});
+					}
+
+					// Find the radius for this pie series then draw it
+					var radius = outerRadius - (REDRAW_SHRINK * attempts) - ((outerRadius - innerRadius) / maxSeries * s);
+					if (!drawPie(newdata, radius, s == maxSeries - 1)) {
+						attempts++;
+						break;
+					}
+				}
+			} while (s < maxSeries && attempts < REDRAW_ATTEMPTS)
+			
 			if (attempts >= REDRAW_ATTEMPTS) {
 				clear();
 				target.prepend("<div class='error'>Could not draw pie with labels contained inside canvas</div>");
+			}
+			else if (options.series.pie.tilt <= 0.8) {
+				drawShadow();
 			}
 
 			if (plot.setSeries && plot.insertLegend) {
@@ -371,10 +318,9 @@ More detail and specific examples can be found in the included HTML file.
 				ctx.restore();
 			}
 
-			function drawPie() {
+			function drawPie(slices, radius, isLastPie) {
 
 				var startAngle = Math.PI * options.series.pie.startAngle;
-				var radius = options.series.pie.radius > 1 ? options.series.pie.radius : maxRadius * options.series.pie.radius;
 
 				// center and rotate to starting position
 
@@ -406,15 +352,15 @@ More detail and specific examples can be found in the included HTML file.
 				}
 
 				// draw donut hole
-
-				drawDonutHole(ctx);
+				if (isLastPie)
+					drawDonutHole(ctx);
 
 				ctx.restore();
 
 				// Draw the labels, returning true if they fit within the plot
 
 				if (options.series.pie.label.show) {
-					return drawLabels();
+					return drawLabels(slices);
 				} else return true;
 
 				function drawSlice(angle, color, fill) {
@@ -449,7 +395,7 @@ More detail and specific examples can be found in the included HTML file.
 					}
 				}
 
-				function drawLabels() {
+				function drawLabels(slices) {
 
 					var currentAngle = startAngle;
 					var radius = options.series.pie.label.radius > 1 ? options.series.pie.label.radius : maxRadius * options.series.pie.label.radius;
@@ -535,7 +481,6 @@ More detail and specific examples can be found in the included HTML file.
 				// subtract the center
 
 				layer.save();
-				var innerRadius = options.series.pie.innerRadius > 1 ? options.series.pie.innerRadius : maxRadius * options.series.pie.innerRadius;
 				layer.globalCompositeOperation = "destination-out"; // this does not work with excanvas, but it will fall back to using the stroke color
 				layer.beginPath();
 				layer.fillStyle = options.series.pie.stroke.color;
