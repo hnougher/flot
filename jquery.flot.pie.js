@@ -74,7 +74,8 @@ More detail and specific examples can be found in the included HTML file.
 			innerRadius = null,
 			centerLeft = null,
 			centerTop = null,
-			ctx = null;
+			ctx = null,
+			sliceData = [];
 
 		// interactive variables
 
@@ -200,24 +201,30 @@ More detail and specific examples can be found in the included HTML file.
 			}
 			
 			do {
-				// Clear canvas
+				// Clear canvas and slice data
 				clear();
+				sliceData = [];
 
 				// Process the series one-by-one
 				var s;
 				for (s = 0; s < maxSeries; s++) {
 
-					// Get total for this set
 					var total = 0,
 						combined = 0,
 						numCombined = 0,
 						color = options.series.pie.combine.color,
 						newdata = [];
+					
+					// Calculate this series radius
+					var radius = outerRadius - (REDRAW_SHRINK * attempts) - ((outerRadius - innerRadius) / maxSeries * s),
+						holeRadius = outerRadius - (REDRAW_SHRINK * attempts) - ((outerRadius - innerRadius) / maxSeries * (s+1));
 
+					// Get total for this set
 					for (var i = 0; i < data.length; ++i) {
 						if (data[i].data[s])
 							total += data[i].data[s][1];
 					}
+
 					// Count the number of slices with percentages below the combine
 					// threshold; if it turns out to be just one, we won't combine.
 
@@ -241,6 +248,8 @@ More detail and specific examples can be found in the included HTML file.
 								label: data[i].label,
 								angle: value * Math.PI * 2 / total,
 								percent: value / (total / 100),
+								radius: radius,
+								holeRadius: holeRadius
 							});
 						}
 					}
@@ -251,16 +260,20 @@ More detail and specific examples can be found in the included HTML file.
 							color: color,
 							label: options.series.pie.combine.label,
 							angle: combined * Math.PI * 2 / total,
-							percent: combined / (total / 100)
+							percent: combined / (total / 100),
+							radius: radius,
+							holeRadius: holeRadius
 						});
 					}
 
-					// Find the radius for this pie series then draw it
-					var radius = outerRadius - (REDRAW_SHRINK * attempts) - ((outerRadius - innerRadius) / maxSeries * s);
-					if (!drawPie(newdata, radius, s == maxSeries - 1)) {
+					// Draw the series
+					if (!drawPie(newdata, s == maxSeries - 1)) {
 						attempts++;
 						break;
 					}
+					
+					// Add this set of slice data to the main array
+					sliceData = sliceData.concat(newdata);
 				}
 			} while (s < maxSeries && attempts < REDRAW_ATTEMPTS)
 			
@@ -318,9 +331,10 @@ More detail and specific examples can be found in the included HTML file.
 				ctx.restore();
 			}
 
-			function drawPie(slices, radius, isLastPie) {
+			function drawPie(slices, isLastPie) {
 
 				var startAngle = Math.PI * options.series.pie.startAngle;
+				var radius;
 
 				// center and rotate to starting position
 
@@ -334,6 +348,7 @@ More detail and specific examples can be found in the included HTML file.
 				ctx.save();
 				var currentAngle = startAngle;
 				for (var i = 0; i < slices.length; ++i) {
+					radius = slices[i].radius;
 					slices[i].startAngle = currentAngle;
 					drawSlice(slices[i].angle, slices[i].color, true);
 				}
@@ -346,6 +361,7 @@ More detail and specific examples can be found in the included HTML file.
 					ctx.lineWidth = options.series.pie.stroke.width;
 					currentAngle = startAngle;
 					for (var i = 0; i < slices.length; ++i) {
+						radius = slices[i].radius;
 						drawSlice(slices[i].angle, options.series.pie.stroke.color, false);
 					}
 					ctx.restore();
@@ -515,16 +531,16 @@ More detail and specific examples can be found in the included HTML file.
 
 		function findNearbySlice(mouseX, mouseY) {
 
-			var slices = plot.getData(),
+			var slices = sliceData,
 				options = plot.getOptions(),
-				radius = options.series.pie.radius > 1 ? options.series.pie.radius : maxRadius * options.series.pie.radius,
 				x, y;
 
-			for (var i = 0; i < slices.length; ++i) {
+			for (var i = slices.length - 1; i >= 0; --i) {
 
-				var s = slices[i];
+				var s = slices[i],
+					radius = s.radius;
 
-				if (s.pie.show) {
+				if (options.series.pie.show) {
 
 					ctx.save();
 					ctx.beginPath();
@@ -670,8 +686,6 @@ More detail and specific examples can be found in the included HTML file.
 
 			var options = plot.getOptions();
 
-			var radius = options.series.pie.radius > 1 ? options.series.pie.radius : maxRadius * options.series.pie.radius;
-
 			octx.save();
 			octx.translate(centerLeft, centerTop);
 			octx.scale(1, options.series.pie.tilt);
@@ -680,12 +694,9 @@ More detail and specific examples can be found in the included HTML file.
 				drawHighlight(highlights[i].series);
 			}
 
-			drawDonutHole(octx);
-
 			octx.restore();
 
 			function drawHighlight(series) {
-
 				if (series.angle <= 0 || isNaN(series.angle)) {
 					return;
 				}
@@ -693,11 +704,10 @@ More detail and specific examples can be found in the included HTML file.
 				//octx.fillStyle = parseColor(options.series.pie.highlight.color).scale(null, null, null, options.series.pie.highlight.opacity).toString();
 				octx.fillStyle = "rgba(255, 255, 255, " + options.series.pie.highlight.opacity + ")"; // this is temporary until we have access to parseColor
 				octx.beginPath();
-				if (Math.abs(series.angle - Math.PI * 2) > 0.000000001) {
-					octx.moveTo(0, 0); // Center of the pie
-				}
-				octx.arc(0, 0, radius, series.startAngle, series.startAngle + series.angle / 2, false);
-				octx.arc(0, 0, radius, series.startAngle + series.angle / 2, series.startAngle + series.angle, false);
+				octx.arc(0, 0, series.radius, series.startAngle, series.startAngle + series.angle / 2, false);
+				octx.arc(0, 0, series.radius, series.startAngle + series.angle / 2, series.startAngle + series.angle, false);
+				octx.arc(0, 0, series.holeRadius, series.startAngle + series.angle, series.startAngle + series.angle / 2, true);
+				octx.arc(0, 0, series.holeRadius, series.startAngle + series.angle / 2, series.startAngle, true);
 				octx.closePath();
 				octx.fill();
 			}
